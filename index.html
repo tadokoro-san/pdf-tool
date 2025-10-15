@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<title>PDF分割・結合ツール</title>
+<link href="data:," rel="icon"/>
+<!--
+Third-Party Licenses (summary)
+- pdf-lib (MIT) https://github.com/Hopding/pdf-lib
+- pdf.js (Apache-2.0) via pdfjs-dist https://github.com/mozilla/pdf.js
+- JSZip (MIT) https://stuk.github.io/jszip/
+This app does not send files to any server; all processing runs in-browser.
+-->
+<style>
+:root{ --bg:#f8fafc; --panel:#ffffff; --line:#e5e7eb; --muted:#64748b; --text:#0f172a; --accent:#2563eb; }
+*{ box-sizing:border-box }
+html,body{ height:100% }
+body{ margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial }
+.header{ display:flex; align-items:center; gap:10px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:20 }
+.title{ font-weight:700 }
+.hint{ color:#64748b; font-size:12px }
+.headerRight{ margin-left:auto; display:flex; align-items:center; gap:12px }
+.link{ color:#2563eb; text-decoration:underline; cursor:pointer; font-size:12px }
+
+.main{ display:grid; grid-template-rows:auto 1fr; height:calc(100vh - 0px) }
+.workWrap{ display:grid; grid-template-columns:minmax(240px,40%) 6px 1fr; gap:0; padding:12px; align-items:stretch }
+.left{ background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; min-height:0; display:flex; flex-direction:column }
+.right{ background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; min-height:0; display:flex; flex-direction:column }
+
+.resizer{ background:linear-gradient(90deg,#e5e7eb,#cbd5e1); width:6px; cursor:col-resize }
+.resizer:hover{ background:linear-gradient(90deg,#cbd5e1,#94a3b8) }
+
+/* Toolbar (buttons above list) */
+.leftToolbar{ display:flex; gap:8px; padding:10px 12px; border-bottom:1px solid var(--line); align-items:center; justify-content:flex-start; background:#fff }
+.btn{ background:#fff; border:1px solid var(--line); color:#0f172a; padding:8px 12px; border-radius:10px; cursor:pointer; user-select:none; box-shadow:0 1px 2px rgba(0,0,0,.04); font-size:14px }
+.btn:hover{ background:#f8fafc; border-color:#cbd5e1 }
+.btn.primary{ background:#eef2ff; border-color:var(--accent) }
+.btn[disabled]{ opacity:.55; cursor:not-allowed }
+
+.drop{ border:2px dashed #cbd5e1; border-radius:12px; padding:14px; text-align:center; color:#64748b; cursor:pointer; margin:10px 12px; background:#fff }
+.drop.drag{ background:#eef2ff; border-color:#93c5fd }
+.drop .note{ margin-top:6px; font-size:12px; color:#475569 }
+
+.listHeader{ padding:8px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between }
+.listTitle{ font-weight:600 }
+.actions{ display:flex; gap:6px }
+.btnx{ border:1px solid #e5e7eb; background:#fff; border-radius:8px; padding:4px 8px; font-size:12px; cursor:pointer }
+.btnx:hover{ background:#f8fafc }
+
+.list{ height:100%; overflow:auto; padding:8px 8px 12px; display:flex; flex-direction:column; gap:6px }
+.sep{ height:18px; border-radius:6px; border:1px dashed #d1d5db; background:#f8fafc; display:flex; align-items:center; justify-content:center; color:#64748b; font-size:10px; user-select:none }
+.sep.tip::after{ content:"ここに挿入（ドラッグ/クリック）"; }
+.sep.active{ background:#dbeafe; border-color:#3b82f6; }
+.item{ display:grid; grid-template-columns: 22px 40px 1fr 36px; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer }
+.item.dragging{ opacity:.6 }
+.item.current{ outline:2px dashed #93c5fd }
+.item.selected{ outline:2px solid #3b82f6; background:#eff6ff }
+.handle{ cursor:grab; user-select:none; color:#475569 }
+.thumb{ width:40px; height:54px; border:1px solid #e5e7eb; border-radius:6px; background:#f8fafc; display:flex; align-items:center; justify-content:center; overflow:hidden }
+.thumb img{ width:100%; height:100%; object-fit:cover }
+.name{ font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.meta{ font-size:11px; color:#64748b }
+.empty{ color:#64748b; font-size:13px; text-align:center; padding:18px }
+
+.rightTop{ padding:10px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; justify-content:space-between }
+.ctrls{ display:flex; align-items:center; gap:10px }
+.mode{ display:flex; align-items:center; gap:8px; font-size:12px; color:#475569 }
+.mode label{ display:flex; align-items:center; gap:4px; }
+
+.previewWrap{ position:relative; height:100%; overflow:auto; background:#f9fafb; display:flex; align-items:flex-start; justify-content:center; }
+.canvasHolder{ margin:16px 0; transition:opacity .12s ease }
+#canvas{ background:#fff; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 1px 2px rgba(0,0,0,.06); display:block }
+
+/* Modal */
+.modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(15,23,42,.42); z-index:50 }
+.modal.show{ display:flex }
+.modalCard{ width:min(560px,calc(100vw - 32px)); background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:14px }
+.modalHead{ font-weight:700; margin-bottom:6px }
+.modalBody{ font-size:14px; color:#334155 }
+.modalFoot{ margin-top:12px; display:flex; gap:8px; justify-content:flex-end }
+.small{ font-size:12px; color:#64748b }
+</style>
+</head>
+<body>
+<div class="header">
+<div class="title">PDF ツール v12 + 中央同期</div>
+<div class="hint">左へPDFをドラッグ＆ドロップ／クリックで追加。分割・結合ボタンは一覧の上。</div>
+<div class="headerRight">
+<span class="link" id="openLicense">ⓘ ライセンス</span>
+</div>
+</div>
+<div class="main">
+<div class="workWrap">
+<div class="left">
+<div class="leftToolbar">
+<button class="btn" disabled="" id="btnSplit">分割</button>
+<button class="btn primary" disabled="" id="btnMerge">結合</button>
+<button class="btn" id="btnClearAll" title="左の一覧から読み込んだPDFをすべて外します">クリア</button>
+</div>
+<div class="drop" id="drop">ここにPDFをドロップ（クリックで選択）<div class="note">※複数PDFを入れると「結合」で1つにまとめられます。</div></div>
+<div class="listHeader">
+<div class="listTitle" id="listTitle">ファイル一覧</div>
+<div class="actions">
+<button class="btnx" id="sortAsc">昇順</button>
+<button class="btnx" id="sortDesc">降順</button>
+<button class="btnx" id="reverse">逆順</button>
+</div>
+</div>
+<div class="list" id="list"><div class="empty">PDFを入れるとここに並びます</div></div>
+<input accept="application/pdf" id="fileInput" multiple="" style="display:none" type="file"/>
+</div>
+<div class="resizer" id="resizer" title="左右の幅をドラッグで調整"></div>
+<div class="right">
+<div class="rightTop">
+<div style="display:flex; align-items:center; gap:8px;">
+<div style="font-weight:600;">プレビュー</div>
+<div class="hint" id="previewInfo">—</div>
+</div>
+<div class="ctrls">
+<label class="hint">ズーム</label>
+<input id="zoom" max="300" min="80" step="10" type="range" value="160"/>
+<span class="hint" id="zoomVal">160%</span>
+</div>
+</div>
+<div class="previewWrap" id="previewWrap">
+<div class="canvasHolder" id="canvasHolder" style="opacity:0;">
+<canvas id="canvas"></canvas>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Confirm Modal -->
+<div aria-modal="true" class="modal" id="confirmModal" role="dialog">
+<div class="modalCard">
+<div class="modalHead" id="confirmTitle">ダウンロード確認</div>
+<div class="modalBody" id="confirmBody">—</div>
+<div class="modalFoot">
+<button class="btn" id="confirmCancel">キャンセル</button>
+<button class="btn primary" id="confirmOk">ダウンロード</button>
+</div>
+</div>
+</div>
+<!-- License Modal -->
+<div aria-modal="true" class="modal" id="licenseModal" role="dialog">
+<div class="modalCard">
+<div class="modalHead">第三者ライセンス</div>
+<div class="modalBody">
+<p><strong>pdf-lib</strong> — MIT License</p>
+<p><strong>pdf.js (pdfjs-dist)</strong> — Apache License 2.0</p>
+<p><strong>JSZip</strong> — MIT License</p>
+<p class="small">※ファイルは端末内で処理され、外部サーバへ送信しません。</p>
+</div>
+<div class="modalFoot">
+<button class="btn primary" id="closeLicense">OK</button>
+</div>
+</div>
+</div>
+<!-- libs (CDN) -->
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/pdfjs-dist@2.16.105/build/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://unpkg.com/pdfjs-dist@2.16.105/build/pdf.worker.min.js";</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+/* ====== State ====== */
+const state = {
+  files: [],                // [{id,name,bytes,pages,thumb?}]
+  mode: 'files',            // 'files' | 'pages'
+  pageOrder: [],            // for pages mode
+  selectedIdx: 0,
+  selectedSet: new Set(),
+  lastClickedIndex: null,
+  heights: [],              // left rows tops (for proportional mapping)
+  totalContent: 0,
+  zoom: 160,
+  centerOnSelect: true,
+  cache: new Map(),         // key: `${fileId}:${pageIdx}:${scale}` -> dataURL
+  lastOutput: null,         // Blob to download via “ダウンロード”
+  lastOutputName: null,
+};
+const uid = ()=>'i'+Math.random().toString(36).slice(2,9);
+
+/* ====== DOM ====== */
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const listEl = document.getElementById('list');
+const listTitle = document.getElementById('listTitle');
+const sortAscBtn = document.getElementById('sortAsc');
+const sortDescBtn = document.getElementById('sortDesc');
+const reverseBtn = document.getElementById('reverse');
+
+const btnSplit = document.getElementById('btnSplit');
+const btnMerge = document.getElementById('btnMerge');
+const btnClearAll = document.getElementById('btnClearAll');
+
+const canvas = document.getElementById('canvas');
+const canvasHolder = document.getElementById('canvasHolder');
+const previewWrap = document.getElementById('previewWrap');
+const previewInfo = document.getElementById('previewInfo');
+const zoom = document.getElementById('zoom');
+const zoomVal = document.getElementById('zoomVal');
+/* centerOnSelect checkbox removed */
+
+const resizer = document.getElementById('resizer');
+const workWrap = document.querySelector('.workWrap');
+const leftPane = document.querySelector('.left');
+
+const confirmModal = document.getElementById('confirmModal');
+const confirmTitle = document.getElementById('confirmTitle');
+const confirmBody = document.getElementById('confirmBody');
+const confirmCancel = document.getElementById('confirmCancel');
+const confirmOk = document.getElementById('confirmOk');
+
+const licenseModal = document.getElementById('licenseModal');
+const openLicense = document.getElementById('openLicense');
+const closeLicense = document.getElementById('closeLicense');
+
+/* ====== Utils ====== */
+/* ====== Multi-select helpers ====== */
+function clearSelection(){ state.selectedSet = new Set(); }
+function setSingleSelection(idx){ state.selectedIdx = idx; state.selectedSet = new Set([idx]); state.lastClickedIndex = idx; }
+function toggleSelection(idx){
+  if(state.selectedSet.has(idx)) state.selectedSet.delete(idx);
+  else state.selectedSet.add(idx);
+  state.selectedIdx = idx;
+  state.lastClickedIndex = idx;
+  if(state.selectedSet.size===0) state.selectedSet.add(idx);
+}
+function rangeSelect(toIdx){
+  const arrLen = (state.mode==='pages') ? state.pageOrder.length : state.files.length;
+  let from = state.lastClickedIndex!=null ? state.lastClickedIndex : state.selectedIdx;
+  if(from==null) from=0;
+  const [a,b] = [Math.min(from,toIdx), Math.max(from,toIdx)];
+  state.selectedSet = new Set(Array.from({length:b-a+1}, (_,i)=>a+i));
+  state.selectedIdx = toIdx;
+  state.lastClickedIndex = toIdx;
+}
+function selectedSorted(){
+  return Array.from(state.selectedSet).sort((a,b)=>a-b);
+}
+function updateSelectedAfterRender(){
+  const rows = Array.from(listEl.querySelectorAll('.item'));
+  rows.forEach((r,i)=>{
+    r.classList.toggle('current', i===state.selectedIdx);
+    r.classList.toggle('selected', state.selectedSet.has(i));
+  });
+}
+
+/* Move block: remove selected indices, compute target insertion pos adjusted, insert block preserving order */
+function moveBlock(arr, selIdxs, toPos){
+  if(selIdxs.length===0) return;
+  // prevent dropping inside the block (no-op)
+  if(toPos > selIdxs[0] && toPos <= selIdxs[selIdxs.length-1]+1) return;
+
+  // Count how many removed before toPos
+  const removedBefore = selIdxs.filter(i => i < toPos).length;
+  const insertionIndex = toPos - removedBefore;
+
+  // Extract block
+  const block = [];
+  for(let i=selIdxs.length-1;i>=0;i--){
+    const idx = selIdxs[i];
+    block.unshift(arr[idx]); // preserve order
+    arr.splice(idx,1);
+  }
+  // Insert
+  arr.splice(insertionIndex, 0, ...block);
+
+  // New selection indices after insertion
+  const newStart = insertionIndex;
+  state.selectedSet = new Set(Array.from({length:block.length}, (_,k)=> newStart + k));
+  state.selectedIdx = newStart;
+  state.lastClickedIndex = newStart;
+}
+
+function openModal(el){ el.classList.add('show'); }
+function closeModal(el){ el.classList.remove('show'); }
+openLicense.addEventListener('click', ()=> openModal(licenseModal));
+closeLicense.addEventListener('click', ()=> closeModal(licenseModal));
+
+function confirmDownload(title, body, okLabel = 'ダウンロード'){
+  return new Promise((resolve)=>{
+    confirmTitle.textContent = title;
+    confirmBody.innerHTML = body;
+    confirmOk.textContent = okLabel;
+    openModal(confirmModal);
+    const onCancel = ()=>{ cleanup(); resolve(false); };
+    const onOk = ()=>{ cleanup(); resolve(true); };
+    function cleanup(){
+      confirmCancel.removeEventListener('click', onCancel);
+      confirmOk.removeEventListener('click', onOk);
+      closeModal(confirmModal);
+    }
+    confirmCancel.addEventListener('click', onCancel);
+    confirmOk.addEventListener('click', onOk);
+  });
+}
+
+async function bytesOf(f){ return new Uint8Array(await f.arrayBuffer()); }
+async function ensureMeta(doc){
+  if(doc.pages==null){
+    try{ const d = await PDFLib.PDFDocument.load(doc.bytes); doc.pages = d.getPageCount(); }
+    catch{ doc.pages = '?'; }
+  }
+  if(!doc.thumb){
+    try{
+      const pdf = await pdfjsLib.getDocument({data: doc.bytes}).promise;
+      const p = await pdf.getPage(1);
+      const v = p.getViewport({scale:0.18});
+      const c = document.createElement('canvas'); c.width=v.width; c.height=v.height;
+      await p.render({canvasContext:c.getContext('2d'), viewport:v}).promise;
+      doc.thumb = c.toDataURL('image/png');
+    }catch{}
+  }
+}
+async function pageThumbFromDocBytes(bytes, pageIndex, scale=0.14){
+  const pdf = await pdfjsLib.getDocument({data: bytes}).promise;
+  const p = await pdf.getPage(pageIndex+1);
+  const v = p.getViewport({scale});
+  const c = document.createElement('canvas'); c.width=v.width; c.height=v.height;
+  await p.render({canvasContext:c.getContext('2d'), viewport:v}).promise;
+  return c.toDataURL('image/png');
+}
+function triggerDownload(blob, filename){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+/* ====== Drop Zone ====== */
+drop.addEventListener('click', ()=>fileInput.click());
+fileInput.addEventListener('change', async ()=>{ await addFiles(fileInput.files); fileInput.value=''; });
+;['dragenter','dragover'].forEach(evt=> drop.addEventListener(evt, e=>{ e.preventDefault(); e.stopPropagation(); drop.classList.add('drag'); }));
+;['dragleave','drop'].forEach(evt=> drop.addEventListener(evt, e=>{ e.preventDefault(); e.stopPropagation(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', async e=>{ await addFiles(e.dataTransfer.files); });
+
+async function addFiles(fs){
+  const list = Array.from(fs||[]).filter(f=>f.type==='application/pdf');
+  if(!list.length){ return; }
+  for(const f of list){
+    const bytes = await bytesOf(f);
+    const doc = {id:uid(), name:f.name, bytes, pages:null, thumb:null};
+    await ensureMeta(doc);
+    state.files.push(doc);
+  }
+  state.selectedIdx = 0;
+  state.selectedSet = new Set([0]); state.lastClickedIndex = 0;
+  state.mode = (state.files.length===1 && Number(state.files[0].pages)>1) ? 'pages' : 'files';
+  if(state.mode==='pages') buildPageOrder();
+  renderList(); updateButtons(); renderSelected(true);
+}
+
+function buildPageOrder(){
+  const d = state.files[0];
+  const total = Number(d.pages)||0;
+  state.pageOrder = Array.from({length: total}, (_,i)=>({index:i, thumb:null}));
+}
+
+/* ====== List Render ====== */
+function renderList(){
+  const multiDragMime='text/x-multi-idxs';
+  listEl.innerHTML='';
+  const isPages = state.mode==='pages';
+  const arr = isPages ? state.pageOrder : state.files;
+  listTitle.textContent = isPages ? 'ページ一覧（間に挿入 / 並べ替え可）' : 'ファイル一覧（間に挿入 / 並べ替え可）';
+
+  if(arr.length===0){
+    listEl.innerHTML = '<div class="empty">PDFを入れるとここに並びます</div>';
+    state.heights=[]; state.totalContent=0; updateButtons(); return;
+  }
+
+  listEl.appendChild(makeSeparator(0));
+  arr.forEach((it, idx)=>{
+    const row = document.createElement('div');
+    row.className='item'; row.dataset.idx=idx; row.draggable = true;
+
+    const title = isPages ? `p${it.index+1}` : (it.name||'document');
+    const meta = isPages ? '' : `${arr[idx]?.pages||'?'}p`;
+
+    const thumbDiv = document.createElement('div'); thumbDiv.className='thumb';
+    const img = document.createElement('img'); thumbDiv.appendChild(img);
+    (async()=>{
+      if(isPages){
+        if(!it.thumb){ it.thumb = await pageThumbFromDocBytes(state.files[0].bytes, it.index); }
+        img.src = it.thumb;
+      }else{
+        if(!it.thumb){ await ensureMeta(it); }
+        img.src = it.thumb || '';
+      }
+    })();
+
+    row.innerHTML = `
+      <div class="handle">↕︎</div>
+      <div class="thumb"></div>
+      <div><div class="name">${title}</div><div class="meta">${meta}</div></div>
+      <div style="display:flex; justify-content:flex-end;">
+        <button class="btnx" data-op="del" title="リストから外す">×</button>
+      </div>`;
+    row.replaceChild(thumbDiv, row.children[1]);
+
+    row.addEventListener('click', e=>{
+      if(e.target.closest('button')) return;
+      const idx = Number(row.dataset.idx);
+      if(e.shiftKey){ rangeSelect(idx); }
+      else if(e.ctrlKey || e.metaKey){ toggleSelection(idx); }
+      else { setSingleSelection(idx); }
+      updateHighlight(); updateSelectedAfterRender(); renderSelected(true);
+    });
+
+    row.querySelector('[data-op="del"]').addEventListener('click', e=>{
+      e.stopPropagation();
+      const sel = selectedSorted();
+      const targets = sel.includes(idx) ? sel : [idx];
+      for(let i=targets.length-1;i>=0;i--){ arr.splice(targets[i],1); }
+      // reset selection
+      state.selectedIdx = Math.max(0, Math.min(state.selectedIdx, arr.length-1));
+      state.selectedSet = new Set([state.selectedIdx]);
+      if(state.files.length===1 && Number(state.files[0].pages)>1){ state.mode='pages'; buildPageOrder(); }
+      renderList(); renderSelected(true);
+    });
+
+    row.addEventListener('dragstart', e=>{
+      if(!state.selectedSet.has(idx)) setSingleSelection(idx);
+      row.classList.add('dragging');
+      const sel = selectedSorted();
+      e.dataTransfer.setData('text/plain', String(sel[0]));
+      e.dataTransfer.setData('text/x-multi-idxs', JSON.stringify(sel));
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragend', ()=> row.classList.remove('dragging'));
+
+    if(idx===state.selectedIdx) row.classList.add('current');
+
+    listEl.appendChild(row);
+    listEl.appendChild(makeSeparator(idx+1));
+  });
+
+  updateSelectedAfterRender();
+  rebuildHeights();
+  updateButtons();
+}
+
+function makeSeparator(pos){
+  const sep=document.createElement('div');
+  sep.className='sep tip'; sep.dataset.pos = pos;
+  sep.addEventListener('click', ()=>{
+    const isPages = state.mode==='pages';
+    const arr = isPages ? state.pageOrder : state.files;
+    if(arr.length===0) return;
+    const sel = selectedSorted();
+    if(sel.length<=1){
+      const from = state.selectedIdx;
+      moveInArray(arr, from, pos);
+      state.selectedIdx = Math.min(pos, arr.length-1);
+      state.selectedSet = new Set([state.selectedIdx]);
+    } else {
+      moveBlock(arr, sel, pos);
+    }
+    renderList(); renderSelected(true);
+  });
+  sep.addEventListener('dragover', e=>{ e.preventDefault(); sep.classList.add('active'); });
+  sep.addEventListener('dragleave', ()=> sep.classList.remove('active'));
+  sep.addEventListener('drop', e=>{
+    e.preventDefault();
+    const to = Number(sep.dataset.pos);
+    const isPages = state.mode==='pages';
+    const arr = isPages ? state.pageOrder : state.files;
+    let sel;
+    try{ sel = JSON.parse(e.dataTransfer.getData('text/x-multi-idxs')); }catch{ sel = null; }
+    if(!sel || !Array.isArray(sel) || sel.length===0){
+      const from = Number(e.dataTransfer.getData('text/plain'));
+      moveInArray(arr, from, to);
+      state.selectedSet = new Set([Math.min(to, arr.length-1)]);
+      state.selectedIdx = Math.min(to, arr.length-1);
+    } else {
+      sel = sel.sort((a,b)=>a-b);
+      moveBlock(arr, sel, to);
+    }
+    renderList(); renderSelected(true);
+  });
+  return sep;
+}
+function moveInArray(arr, from, to){
+  if(from===to || from<0 || from>=arr.length || to<0 || to>arr.length) return;
+  const item = arr.splice(from,1)[0];
+  const adj = (from<to)? to-1 : to;
+  arr.splice(adj,0,item);
+}
+
+/* ====== Sorting ====== */
+sortAscBtn.addEventListener('click', ()=>{
+  if(state.mode==='files') state.files.sort((a,b)=> a.name.localeCompare(b.name, 'ja'));
+  else state.pageOrder.sort((a,b)=> a.index-b.index);
+  renderList(); renderSelected(true);
+});
+sortDescBtn.addEventListener('click', ()=>{
+  if(state.mode==='files') state.files.sort((a,b)=> b.name.localeCompare(a.name, 'ja'));
+  else state.pageOrder.sort((a,b)=> b.index-a.index);
+  renderList(); renderSelected(true);
+});
+reverseBtn.addEventListener('click', ()=>{
+  if(state.mode==='files') state.files.reverse(); else state.pageOrder.reverse();
+  renderList(); renderSelected(true);
+});
+
+/* ====== Buttons enable/disable ====== */
+function updateButtons(){
+  const hasFiles = state.files.length>0;
+  const canSplit = (state.files.length===1);
+  const canMerge = ( (state.mode==='files' && state.files.length>=2) || (state.mode==='pages' && state.pageOrder.length>=1) );
+  btnSplit.disabled = !canSplit;
+  btnMerge.disabled = !canMerge;
+}
+
+/* ====== Preview (single canvas) ====== */
+async function renderSelected(centerAfter=false){
+  if(state.files.length===0){ previewInfo.textContent='—'; canvasHolder.style.opacity=0; return; }
+  canvasHolder.style.opacity=0.0;
+
+  const isPages = state.mode==='pages';
+  const fileIdx = isPages ? 0 : state.selectedIdx;
+  const pageIdx = isPages ? (state.pageOrder[state.selectedIdx]?.index||0) : 0;
+  const doc = isPages ? state.files[0] : state.files[fileIdx];
+  const scale = Number(zoom.value)/100;
+
+  // cache key
+  const key = `${doc.id}:${pageIdx}:${scale}`;
+  let dataUrl = state.cache.get(key);
+
+  const pdf = await pdfjsLib.getDocument({data: doc.bytes}).promise;
+  const page = await pdf.getPage((isPages? pageIdx+1 : 1));
+  const viewport = page.getViewport({scale});
+  const ratio = Math.max(1, window.devicePixelRatio||1);
+
+  canvas.width = Math.floor(viewport.width*ratio);
+  canvas.height= Math.floor(viewport.height*ratio);
+  canvas.style.width = Math.floor(viewport.width)+'px';
+  canvas.style.height= Math.floor(viewport.height)+'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+  ctx.clearRect(0,0,viewport.width, viewport.height);
+
+  if(dataUrl){
+    const img = new Image();
+    await new Promise(res=>{ img.onload=res; img.src=dataUrl; });
+    ctx.drawImage(img, 0, 0);
+  }else{
+    await page.render({canvasContext:ctx, viewport}).promise;
+    // cache
+    dataUrl = canvas.toDataURL('image/png');
+    state.cache.set(key, dataUrl);
+  }
+
+  // info & fade
+  previewInfo.textContent = isPages ? `${doc.name} – p${pageIdx+1}` : `${doc.name} – 1ページ目`;
+  requestAnimationFrame(()=>{ canvasHolder.style.opacity=1; });
+
+  if(centerAfter && state.centerOnSelect) centerPreviewOnCanvas();
+}
+
+function centerPreviewOnCanvas(anchorRatio=0.5, smooth=true){
+  const target = canvas.offsetTop + canvas.clientHeight*anchorRatio - (previewWrap.clientHeight/2);
+  previewWrap.scrollTo({ top: Math.max(0, target), behavior: smooth ? 'smooth' : 'auto' });
+}
+
+function setSelected(idx){
+  const len = (state.mode==='pages') ? state.pageOrder.length : state.files.length;
+  state.selectedIdx = Math.max(0, Math.min(len-1, idx));
+  state.selectedSet = new Set([state.selectedIdx]);
+  state.lastClickedIndex = state.selectedIdx;
+  updateHighlight(); renderSelected(true);
+}
+
+function updateHighlight(){
+  const rows = Array.from(listEl.querySelectorAll('.item'));
+  rows.forEach((r,i)=>{
+    r.classList.toggle('current', i===state.selectedIdx);
+    r.classList.toggle('selected', state.selectedSet.has(i));
+  });
+}
+
+/* ====== Scroll sync (left -> selected) ====== */
+function rebuildHeights(){
+  const rows = Array.from(listEl.querySelectorAll('.item'));
+  state.heights = rows.map(r=> r.offsetTop);
+  if(rows.length){
+    const last = rows[rows.length-1];
+    state.totalContent = last.offsetTop + last.offsetHeight;
+  }else{
+    state.totalContent = 0;
+  }
+}
+function computeIndexFromScroll(){
+  const rows = Array.from(listEl.querySelectorAll('.item'));
+  if(!rows.length) return 0;
+  const rect = listEl.getBoundingClientRect();
+  const cy = rect.top + rect.height/2;
+  let best=0, d=1e9;
+  rows.forEach((row,i)=>{
+    const r=row.getBoundingClientRect();
+    const mid=(r.top+r.bottom)/2;
+    const dv=Math.abs(mid-cy);
+    if(dv<d){ d=dv; best=i; }
+  });
+  return best;
+}
+let rafL=null;
+listEl.addEventListener('scroll', ()=>{
+  if(rafL) cancelAnimationFrame(rafL);
+  rafL = requestAnimationFrame(()=>{
+    rafL=null;
+    const idx = computeIndexFromScroll();
+    if(idx!==state.selectedIdx){ state.selectedIdx = idx; updateHighlight(); renderSelected(true); }
+    // Always keep preview centered while scrolling for visibility (no smooth to avoid lag)
+    centerPreviewOnCanvas(0.5, false);
+  });
+});
+
+
+/* ====== Zoom keeps center ====== */
+zoom.addEventListener('input', ()=>{
+  zoomVal.textContent = zoom.value+'%';
+  const anchor = (previewWrap.scrollTop + previewWrap.clientHeight/2 - canvas.offsetTop) / Math.max(1, canvas.clientHeight);
+  renderSelected(false);
+  setTimeout(()=> centerPreviewOnCanvas(anchor), 0);
+});
+
+
+/* ====== Keyboard navigation ====== */
+/* ====== Keyboard: block movement & delete ====== */
+window.addEventListener('keydown', (e)=>{
+  const arr = (state.mode==='pages') ? state.pageOrder : state.files;
+  if(arr.length===0) return;
+  const sel = selectedSorted();
+  if((e.altKey && (e.key==='ArrowUp' || e.key==='ArrowDown')) || ((e.ctrlKey||e.metaKey) && (e.key==='ArrowUp' || e.key==='ArrowDown'))){
+    e.preventDefault();
+    if(sel.length===0) return;
+    if(e.ctrlKey||e.metaKey){
+      // to start/end
+      const toPos = (e.key==='ArrowUp') ? 0 : arr.length;
+      moveBlock(arr, sel, toPos);
+    }else{
+      // step up/down
+      if(e.key==='ArrowUp'){ moveBlock(arr, sel, Math.max(0, sel[0]-1)); }
+      else { moveBlock(arr, sel, Math.min(arr.length, sel[sel.length-1]+2)); }
+    }
+    renderList(); renderSelected(true);
+  }else if(e.key==='Delete' || e.key==='Backspace'){
+    if(sel.length>0){
+      e.preventDefault();
+      for(let i=sel.length-1;i>=0;i--){ arr.splice(sel[i],1); }
+      state.selectedIdx = Math.max(0, Math.min(state.selectedIdx, arr.length-1));
+      state.selectedSet = new Set([state.selectedIdx]);
+      renderList(); renderSelected(true);
+    }
+  }
+});
+
+window.addEventListener('keydown', (e)=>{
+  const max = (state.mode==='pages') ? state.pageOrder.length-1 : state.files.length-1;
+  if(e.key==='ArrowDown'){ e.preventDefault(); setSelected(Math.min(max, state.selectedIdx+1)); }
+  if(e.key==='ArrowUp'){ e.preventDefault(); setSelected(Math.max(0, state.selectedIdx-1)); }
+  if(e.key==='PageDown'){ e.preventDefault(); setSelected(Math.min(max, state.selectedIdx+3)); }
+  if(e.key==='PageUp'){ e.preventDefault(); setSelected(Math.max(0, state.selectedIdx-3)); }
+});
+
+/* ====== Resizer (px-based) ====== */
+let resizing=false, startX=0, startLeftPx=0;
+resizer.addEventListener('mousedown', e=>{
+  resizing=true; startX=e.clientX;
+  startLeftPx = leftPane.getBoundingClientRect().width;
+  document.body.style.cursor='col-resize';
+});
+window.addEventListener('mousemove', e=>{
+  if(!resizing) return;
+  const dx = e.clientX - startX;
+  const wrapRect = workWrap.getBoundingClientRect();
+  let leftPx = startLeftPx + dx;
+  const minLeft = 220;
+  const maxLeft = Math.max(minLeft, wrapRect.width - 260);
+  leftPx = Math.max(minLeft, Math.min(maxLeft, leftPx));
+  workWrap.style.gridTemplateColumns = `${leftPx}px 6px 1fr`;
+  rebuildHeights();
+  if(state.centerOnSelect) centerPreviewOnCanvas();
+});
+window.addEventListener('mouseup', ()=>{
+  if(resizing){ resizing=false; document.body.style.cursor=''; }
+});
+
+
+/* ====== Clear All ====== */
+btnClearAll.addEventListener('click', async ()=>{
+  const ok = await confirmDownload('入力PDF全クリア', 'ドロップ（読み込み）したPDFを左の一覧からすべて外します。出力ファイルは保持されます。よろしいですか？', 'クリア');
+  if(!ok) return;
+  // Reset state
+  state.files = [];
+  state.pageOrder = [];
+  state.mode = 'files';
+  state.selectedIdx = 0;
+  state.heights = [];
+  state.totalContent = 0;
+  state.cache = new Map();
+  // 出力ファイルは保持（必要時ダウンロード可）
+  // ただし入力PDFが0件の間はダウンロードボタンは非表示
+  // state.lastOutput は保持します
+  // state.lastOutputName も保持します
+  // Reset UI
+  listEl.innerHTML = '<div class="empty">PDFを入れるとここに並びます</div>';
+  previewInfo.textContent = '—';
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  canvasHolder.style.opacity = 0;
+  // Disable buttons
+  updateButtons();
+});
+
+/* ====== Split / Merge / Download ====== */
+btnSplit.addEventListener('click', async ()=>{
+  if(state.files.length!==1){ return; }
+  const d = state.files[0];
+  const ok = await confirmDownload('分割してダウンロード', `${d.name} をページごとにZIPで保存します。よろしいですか？`);
+  if(!ok) return;
+
+  const doc = await PDFLib.PDFDocument.load(d.bytes);
+  const count = doc.getPageCount();
+  const zip = new JSZip();
+  for(let i=0;i<count;i++){
+    const out = await PDFLib.PDFDocument.create();
+    const [pg] = await out.copyPages(doc,[i]);
+    out.addPage(pg);
+    const bytes = await out.save();
+    zip.file(`${d.name.replace(/\\.pdf$/i,'')}_p${String(i+1).padStart(3,'0')}.pdf`, bytes);
+  }
+  const blob = await zip.generateAsync({type:'blob'});
+  state.lastOutput = blob;
+  state.lastOutputName = `${d.name.replace(/\\.pdf$/i,'')}_split.zip`;
+  updateButtons();
+  triggerDownload(blob, state.lastOutputName);
+});
+
+btnMerge.addEventListener('click', async ()=>{
+  const isPages = state.mode==='pages';
+  const ok = await confirmDownload('結合してダウンロード', isPages
+    ? 'ページの現在の順番で 1 つの PDF に結合します。よろしいですか？'
+    : `リストの順番で ${state.files.length} 件のPDFを結合します。よろしいですか？`);
+  if(!ok) return;
+
+  let outBytes=null;
+  if(isPages){
+    const d = state.files[0];
+    const src = await PDFLib.PDFDocument.load(d.bytes);
+    const out = await PDFLib.PDFDocument.create();
+    for(const it of state.pageOrder){
+      const [pg] = await out.copyPages(src, [it.index]);
+      out.addPage(pg);
+    }
+    outBytes = await out.save();
+  }else{
+    const out = await PDFLib.PDFDocument.create();
+    for(const f of state.files){
+      const src = await PDFLib.PDFDocument.load(f.bytes);
+      const pages = await out.copyPages(src, src.getPageIndices());
+      pages.forEach(p=> out.addPage(p));
+    }
+    outBytes = await out.save();
+  }
+  const blob = new Blob([outBytes], {type:'application/pdf'});
+  state.lastOutput = blob;
+  state.lastOutputName = 'merged.pdf';
+  updateButtons();
+  triggerDownload(blob, state.lastOutputName);
+});
+
+btnDownload.addEventListener('click', ()=>{
+  if(!(state.lastOutput instanceof Blob)) return;
+  triggerDownload(state.lastOutput, state.lastOutputName || 'output.pdf');
+});
+
+</script>
+<!--
+PDF Split & Merge Tool (Browser-only)
+Author: tadokoro-san
+License: MIT License (for this project)
+Copyright (c) 2025 tadokoro-san
+
+This project includes the following open-source software:
+
+1. pdf-lib
+   - License: MIT License
+   - Copyright (c) 2017, Hopding
+   - Repository: https://github.com/Hopding/pdf-lib
+   - Permission is hereby granted, free of charge, to any person obtaining a copy
+     of this software and associated documentation files (the "Software"), to deal
+     in the Software without restriction, including without limitation the rights
+     to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+     copies of the Software, and to permit persons to whom the Software is
+     furnished to do so, subject to the following conditions:
+
+     The above copyright notice and this permission notice shall be included in
+     all copies or substantial portions of the Software.
+
+     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+     THE SOFTWARE.
+
+2. pdf.js
+   - License: Apache License 2.0
+   - Copyright (c) 2012 Mozilla Foundation
+   - Repository: https://github.com/mozilla/pdf.js
+   - Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+       http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+
+3. JSZip
+   - License: MIT License
+   - Copyright (c) 2009-2020, Stuart Knightley, David Duponchel
+   - Repository: https://github.com/Stuk/jszip
+   - Permission is hereby granted, free of charge, to any person obtaining a copy
+     of this software and associated documentation files (the "Software"), to deal
+     in the Software without restriction, including without limitation the rights
+     to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+     copies of the Software, and to permit persons to whom the Software is
+     furnished to do so, subject to the following conditions:
+
+     The above copyright notice and this permission notice shall be included in
+     all copies or substantial portions of the Software.
+
+     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+     THE SOFTWARE.
+
+This tool uses the above libraries loaded from official CDN sources.
+No external communication, tracking, or data collection is performed.
+
+Provided "AS IS", without warranty of any kind, express or implied,
+including but not limited to the warranties of merchantability,
+fitness for a particular purpose and noninfringement.
+--></body>
+</html>
